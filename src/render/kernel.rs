@@ -102,8 +102,8 @@ impl Kernel {
     /// * Returns result, contained by newly created kernel and surface for `window` window.
     pub fn new<'a>(window: Arc<winit::window::Window>) -> Result<(Arc<Kernel>, Surface<'a>), String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::GL,
-            flags: wgpu::InstanceFlags::VALIDATION,
+            backends: if cfg!(debug_assertions) { wgpu::Backends::GL } else { wgpu::Backends::PRIMARY },
+            flags: if cfg!(debug_assertions) { wgpu::InstanceFlags::VALIDATION } else { wgpu::InstanceFlags::empty() },
             ..Default::default()
         });
 
@@ -159,13 +159,6 @@ impl Kernel {
             }
         ))
     } // fn new
-
-    /// Surface for certain window create function
-    /// * `window` - window to create surface for
-    /// * Returns result, contained with newly created surface
-    pub fn create_surface<'a>(window: Arc<winit::window::Window>) -> Result<Surface<'a>, String> {
-        todo!()
-    } // fn create_surface
 } // impl Kernel
 
 // file kernel.rs

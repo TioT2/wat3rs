@@ -42,22 +42,42 @@ struct PrimitiveData {
 
 struct VsOut {
     @builtin(position) projected_position: vec4<f32>,
-    @location(0) normal: vec3f,
+    @location(0) position: vec3f,
+    @location(1) normal: vec3f,
+    @location(2) instance_id: u32,
 }
 
 @vertex
-fn vs_main(vertex: Vertex) -> VsOut {
+fn vs_main(vertex: Vertex, @builtin(instance_index) instance_id: u32) -> VsOut {
     var vs_out: VsOut;
 
     vs_out.projected_position = transform_arr[primitive_data.primitive_index].world_view_projection * vec4f(vertex.position.xyz, 1.0);
+    vs_out.position = (world_arr[primitive_data.primitive_index] * vec4f(vertex.position.xyz, 1.0)).xyz;
     vs_out.normal = transform_arr[primitive_data.primitive_index].world_inverse * vertex.normal;
+    vs_out.instance_id = instance_id;
 
     return vs_out;
 }
 
-@fragment
-fn fs_main(vs_out: VsOut) -> @location(0) vec4f {
-    return vec4f(primitive_data.base_color * clamp(dot(normalize(vs_out.normal), normalize(vec3f(0.30, 0.47, 0.80))), 0.1, 1.0), 255.0);
+struct FsOut {
+    @location(0) position_id: vec4f,
+    @location(1) normal_id: vec4i,
+    @location(2) color_opacity: vec4f,
+    @location(3) metallic_roughness_occlusion_meta: vec4f,
 }
+
+const I16_MAX_F = f32(32767);
+
+@fragment
+fn fs_main(vs_out: VsOut) -> FsOut {
+    var out: FsOut;
+
+    out.position_id = vec4f(vs_out.position, 1.0);
+    out.normal_id = vec4i(vec3i((normalize(vs_out.normal.xyz)) * I16_MAX_F), 1);
+    out.color_opacity = vec4f(primitive_data.base_color, 1.0);
+    out.metallic_roughness_occlusion_meta = vec4f(primitive_data.metallic, primitive_data.roughness, 1.0, 1.0);
+
+    return out;
+} // fn fs_main
 
 // file primitive.wgsl

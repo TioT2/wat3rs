@@ -1,20 +1,18 @@
-use std::sync::Arc;
-
 /// WAT3RS Project
 /// `File` render/mod.rs
 /// `Description` Main render implementation module
 /// `Author` TioT2
 /// `Last changed` 17.02.2024
 
-pub use crate::math::*;
-
 mod camera;
 mod kernel;
 mod texture;
 
 pub use camera::*;
-pub use kernel::*;
+use kernel::*;
 pub use texture::*;
+
+use std::sync::Arc;
 
 /// Vertex content represetnation structure
 #[repr(packed)]
@@ -68,11 +66,13 @@ pub struct PrimitiveBufferData {
     pub metallic: f32,
 }
 
-#[repr(C, align(16))]
-#[derive(Copy, Clone)]
-pub struct WorldMatrixBufferElement {
-    pub transform: Mat4x4f,
-}
+pub type WorldMatrixBufferElement = Mat4x4f;
+
+// #[repr(C, align(16))]
+// #[derive(Copy, Clone)]
+// pub struct WorldMatrixBufferElement {
+//     pub transform: Mat4x4f,
+// }
 
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
@@ -115,7 +115,7 @@ impl Primitive {
 
 pub struct Target {
     position_id: Texture,
-    normal_instance: Texture,
+    normal_id: Texture,
     base_color_opcaity: Texture,
     metallic_roughness_occlusion_meta: Texture,
     depth: Texture,
@@ -233,7 +233,7 @@ impl Kernel {
                 view_formats: &[wgpu::TextureFormat::Rgba32Float],
                 ..descriptor
             }),
-            normal_instance: self.create_texture(&wgpu::TextureDescriptor {
+            normal_id: self.create_texture(&wgpu::TextureDescriptor {
                 format: wgpu::TextureFormat::Rgba16Sint,
                 view_formats: &[wgpu::TextureFormat::Rgba16Sint],
                 ..descriptor
@@ -255,7 +255,57 @@ impl Kernel {
             })
         }
     } // fn create_target
+
+    /// Target bind group create function
+    /// * Returns target sampler
+    fn create_target_bind_group(&self, target: &Target, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(target.position_id.get_view()) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(target.normal_id.get_view()) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(target.base_color_opcaity.get_view()) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(target.metallic_roughness_occlusion_meta.get_view()) },
+            ]
+        })
+    } // fn create_target_bind_group
 }
+
+pub struct DirectionalLight {
+    kernel: Arc<Kernel>,
+    data_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    data: DirectionalLightBufferData,
+}
+
+/// Directional light params representation structure
+#[repr(C, align(16))]
+#[derive(Copy, Clone)]
+pub struct DirectionalLightBufferData {
+    pub direction: Vec3f,
+    pub power: f32,
+    pub color: Vec3f,
+} // struct DirectionalLightData
+
+/// Directional light descritpor
+pub type DirectionalLightDescriptor = DirectionalLightBufferData;
+
+/// Directional light content
+pub type DirectionalLightData = DirectionalLightBufferData;
+
+impl DirectionalLight {
+    pub fn get_data(&self) -> DirectionalLightData {
+        self.data
+    } // fn get_data
+
+    pub fn set_data(&mut self, directional_light_data: &DirectionalLightData) {
+        self.data = *directional_light_data;
+        self.kernel.queue.write_buffer(&self.data_buffer, 0, unsafe {
+            std::slice::from_raw_parts(std::mem::transmute(directional_light_data), std::mem::size_of::<DirectionalLightBufferData>())
+        })
+    } // fn set_data
+} // impl DirectionalLight
 
 /// Renderer representation structure
 pub struct Render<'a> {
@@ -263,8 +313,13 @@ pub struct Render<'a> {
     surface: Surface<'a>,
 
     target: Target,
-    // target_bind_group_layout: wgpu::BindGroupLayout,
-    // target_bind_group: wgpu::BindGroup,
+
+    target_bind_group_layout: wgpu::BindGroupLayout,
+    target_bind_group: wgpu::BindGroup,
+
+    directional_light_pipeline: wgpu::RenderPipeline,
+    directional_light_system_bind_group: wgpu::BindGroup,
+    directional_light_data_bind_group_layout: wgpu::BindGroupLayout,
 
     camera_buffer: wgpu::Buffer,
     world_matrix_buffer: wgpu::Buffer,
@@ -292,11 +347,11 @@ impl<'a> Render<'a> {
 
         let primitive_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
             label: None,
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("primitive.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shaders/primitive.wgsl"))),
         });
         let matrix_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
             label: None,
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("matrix.wgsl")))
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shaders/matrix.wgsl")))
         });
 
         let matrix_capacity = 32usize;
@@ -366,6 +421,156 @@ impl<'a> Render<'a> {
             ],
         });
 
+        let target_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                /* position_id */
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }
+                },
+                /* normal_id */
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Sint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }
+                },
+                /* color_opcaity */
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }
+                },
+                /* metallic_roughness_occlusion_meta */
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }
+                },
+            ]
+        });
+        let target_bind_group = kernel.create_target_bind_group(&target, &target_bind_group_layout);
+
+        let directional_light_system_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(std::num::NonZeroU64::try_from(std::mem::size_of::<CameraBufferData>() as u64).unwrap()),
+                    }
+                }
+            ]
+        });
+
+        let directional_light_system_bind_group = kernel.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &directional_light_system_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &camera_buffer,
+                        offset: 0,
+                        size: Some(std::num::NonZeroU64::try_from(std::mem::size_of::<CameraBufferData>() as u64).unwrap())
+                    })
+                }
+            ]
+        });
+
+        let directional_light_data_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    count: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(std::num::NonZeroU64::try_from(std::mem::size_of::<DirectionalLightBufferData>() as u64).unwrap()),
+                    }
+                }
+            ]
+        });
+
+        let directional_light_pipeline_layout = kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[&target_bind_group_layout, &directional_light_system_bind_group_layout, &directional_light_data_bind_group_layout],
+            ..Default::default()
+        });
+
+        let directional_light_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shaders/directional_light.wgsl")))
+        });
+
+        let directional_light_pipeline = kernel.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            depth_stencil: None,
+            fragment: Some(wgpu::FragmentState {
+                entry_point: "fs_main",
+                module: &directional_light_shader,
+                targets: &[Some(wgpu::ColorTargetState {
+                    blend: Some(wgpu::BlendState {
+                        alpha: wgpu::BlendComponent {
+                            dst_factor: wgpu::BlendFactor::One,
+                            src_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    format: surface.get_format(),
+                    write_mask: wgpu::ColorWrites::all(),
+                })]
+            }),
+            vertex: wgpu::VertexState {
+                buffers: &[],
+                entry_point: "vs_main",
+                module: &directional_light_shader,
+            },
+            label: None,
+            layout: Some(&directional_light_pipeline_layout),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            primitive: wgpu::PrimitiveState {
+                conservative: false,
+                cull_mode: None,
+                front_face: wgpu::FrontFace::Ccw,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                strip_index_format: None,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                unclipped_depth: false,
+            },
+        });
+
         let primitive_pipeline_layout = kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[&primitive_system_bind_group_layout, &primitive_data_bind_group_layout],
@@ -392,35 +597,30 @@ impl<'a> Render<'a> {
                 entry_point: "fs_main",
                 module: &primitive_shader,
                 targets: &[
+                    /* position_id */
                     Some(wgpu::ColorTargetState {
                         blend: None,
-                        format: surface.get_format(),
+                        format: target.position_id.get_texture().format(),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // /* position_id */
-                    // Some(wgpu::ColorTargetState {
-                    //     blend: None,
-                    //     format: target.position_id.get_texture().format(),
-                    //     write_mask: wgpu::ColorWrites::ALL,
-                    // }),
-                    // /* normal_instance */
-                    // Some(wgpu::ColorTargetState {
-                    //     blend: None,
-                    //     format: target.normal_instance.get_texture().format(),
-                    //     write_mask: wgpu::ColorWrites::ALL,
-                    // }),
-                    // /* base_color_opcaity */
-                    // Some(wgpu::ColorTargetState {
-                    //     blend: None,
-                    //     format: target.base_color_opcaity.get_texture().format(),
-                    //     write_mask: wgpu::ColorWrites::ALL,
-                    // }),
-                    // /* metallic_roughness_occlusion_meta */
-                    // Some(wgpu::ColorTargetState {
-                    //     blend: None,
-                    //     format: target.metallic_roughness_occlusion_meta.get_texture().format(),
-                    //     write_mask: wgpu::ColorWrites::ALL,
-                    // }),
+                    /* normal_instance */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: target.normal_id.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    /* base_color_opcaity */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: target.base_color_opcaity.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    /* metallic_roughness_occlusion_meta */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: target.metallic_roughness_occlusion_meta.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
                 ],
             }),
             multisample: Default::default(),
@@ -530,6 +730,11 @@ impl<'a> Render<'a> {
             surface,
             camera_buffer,
             target,
+            target_bind_group_layout,
+            target_bind_group,
+            directional_light_data_bind_group_layout,
+            directional_light_system_bind_group,
+            directional_light_pipeline,
             matrix_bind_group,
             matrix_bind_group_layout,
             matrix_buffer,
@@ -568,6 +773,43 @@ impl<'a> Render<'a> {
             }), std::mem::size_of::<CameraBufferData>())
         });
     }
+
+    /// Directional light create funciton
+    /// * `descriptor` - direcitonal light descriptor
+    /// * Returns created directional light
+    pub fn create_directional_light(&mut self, descriptor: &DirectionalLightDescriptor) -> DirectionalLight {
+        let data_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            mapped_at_creation: false,
+            size: std::mem::size_of::<DirectionalLightBufferData>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        self.kernel.queue.write_buffer(&data_buffer, 0, unsafe {
+            std::slice::from_raw_parts(std::mem::transmute(descriptor), std::mem::size_of::<DirectionalLightBufferData>())
+        });
+
+        let bind_group = self.kernel.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.directional_light_data_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        offset: 0,
+                        buffer: &data_buffer,
+                        size: Some(std::num::NonZeroU64::try_from(std::mem::size_of::<DirectionalLightBufferData>() as u64).unwrap()),
+                    })
+                }
+            ]
+        });
+
+        DirectionalLight {
+            kernel: self.kernel.clone(),
+            data: *descriptor,
+            data_buffer,
+            bind_group,
+        }
+    } // fn create_directional_light
 
     /// Primitive create function
     /// * `descriptor` - created primitive descriptor
@@ -632,15 +874,26 @@ impl<'a> Render<'a> {
             vertex_count: descriptor.vertices.len(),
             world_transforms: Vec::new(),
         }
-    }
+    } // fn create_primitive
 
     /// Scene create function
     /// * Returns created scene
     pub fn create_scene<'b>(&mut self) -> Scene<'b> {
         Scene {
             primitives: Vec::new(),
+            directional_lights: Vec::new(),
         }
     } // fn create_scene
+
+    /// Renderer resize function
+    /// * `new_extent` - new renderer extent
+    pub fn resize(&mut self, new_extent: Vec2<usize>) {
+        self.target = self.kernel.create_target(new_extent);
+        self.target_bind_group = self.kernel.create_target_bind_group(&self.target, &self.target_bind_group_layout);
+        self.surface.resize(new_extent);
+
+        self.camera.resize(new_extent);
+    } // fn resize
 
     /// Scene rendering and presentation requesting function
     /// * `scene` - scene to render
@@ -706,14 +959,42 @@ impl<'a> Render<'a> {
             {
                 let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: &[
+                        /* position_id */
                         Some(wgpu::RenderPassColorAttachment {
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.30, g: 0.47, b: 0.80, a: 0.00 }),
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 store: wgpu::StoreOp::Store,
                             },
                             resolve_target: None,
-                            view: &surface_texture_view,
-                        })
+                            view: &self.target.position_id.get_view(),
+                        }),
+                        /* normal_id */
+                        Some(wgpu::RenderPassColorAttachment {
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            resolve_target: None,
+                            view: &self.target.normal_id.get_view(),
+                        }),
+                        /* color_opacity */
+                        Some(wgpu::RenderPassColorAttachment {
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            resolve_target: None,
+                            view: &self.target.base_color_opcaity.get_view(),
+                        }),
+                        /* metallic_roughness_occlusion_meta */
+                        Some(wgpu::RenderPassColorAttachment {
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            resolve_target: None,
+                            view: &self.target.metallic_roughness_occlusion_meta.get_view(),
+                        }),
                     ],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         depth_ops: Some(wgpu::Operations {
@@ -745,7 +1026,26 @@ impl<'a> Render<'a> {
 
             // `Target -> Screen` render pass
             {
+                // Apply lights
+                let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store
+                        },
+                        resolve_target: None,
+                        view: &surface_texture_view,
+                    })],
+                    ..Default::default()
+                });
 
+                render_pass.set_pipeline(&self.directional_light_pipeline);
+                render_pass.set_bind_group(0, &self.target_bind_group, &[]);
+                render_pass.set_bind_group(1, &self.directional_light_system_bind_group, &[]);
+                for light in &scene.directional_lights {
+                    render_pass.set_bind_group(2, &light.bind_group, &[]);
+                    render_pass.draw(0..4, 0..1);
+                }
             }
 
             let command_buffer = command_encoder.finish();
@@ -759,14 +1059,21 @@ impl<'a> Render<'a> {
 // To-display primitive collection
 pub struct Scene<'a> {
     primitives: Vec<&'a Primitive>,
+    directional_lights: Vec<&'a DirectionalLight>,
 }
 
 impl<'a> Scene<'a> {
     /// Primitive displaying function
     /// * `primitive` - primitive to display scene-lifetime reference
-    pub fn draw_primitive(&mut self, primitive: &'a Primitive) {
+    pub fn add_primitive(&mut self, primitive: &'a mut Primitive) {
         self.primitives.push(primitive);
     } // fn draw_primitive
+
+    /// Directional light to scene adding function
+    /// * `light` - light to add to scene
+    pub fn add_directional_light(&mut self, light: &'a mut DirectionalLight) {
+        self.directional_lights.push(light);
+    } // fn add_directional_light
 } // impl Scene
 
 // file mod.rs

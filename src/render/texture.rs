@@ -1,3 +1,9 @@
+/// WAT3RS Project
+/// `File` render/texture.rs
+/// `Description` Rendertexture impementation module
+/// `Author` TioT2
+/// `Last changed` 17.02.2024
+
 use super::kernel::Kernel;
 
 /// Texture representation structure

@@ -153,7 +153,7 @@ impl Camera {
 
     /// Camera fitting for new resolution
     /// * `new_extent` - new resolution
-    fn resize(&mut self, new_extent: Vec2<usize>) {
+    pub fn resize(&mut self, new_extent: Vec2<usize>) {
         if self.extent.x == new_extent.x && self.extent.y == new_extent.y {
             return;
         }

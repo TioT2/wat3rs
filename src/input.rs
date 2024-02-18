@@ -1,32 +1,43 @@
+/// WAT3RS Project
+/// `File` render/texture.rs
+/// `Description` Input impementation module
+/// `Author` TioT2
+/// `Last changed` 17.02.2024
+
 use std::collections::BTreeMap;
 
-pub type Key = winit::keyboard::KeyCode;
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct KeyState {
+    pressed: bool,
+    changed: bool,
+} // struct KState
 
-#[derive(Copy, Clone, PartialEq, PartialOrd)]
-pub enum KeyState {
-    Pressed,
-    Released,
-}
+pub type KeyCode = winit::keyboard::KeyCode;
 
 pub struct State {
-    keys: BTreeMap<Key, KeyState>,
+    keys: BTreeMap<KeyCode, KeyState>,
 }
 
 impl State {
-    pub fn get_key_state(&self, key: Key) -> KeyState {
+    fn get_key_state(&self, key: KeyCode) -> KeyState {
         if let Some(state) = self.keys.get(&key) {
             *state
         } else {
-            KeyState::Released
+            KeyState { pressed: false, changed: false }
         }
     }
 
-    pub fn is_key_pressed(&self, key: Key) -> bool {
-        self.get_key_state(key) == KeyState::Pressed
+    pub fn is_key_pressed(&self, key: KeyCode) -> bool {
+        self.get_key_state(key).pressed
     }
 
-    pub fn is_key_released(&self, key: Key) -> bool {
-        self.get_key_state(key) == KeyState::Released
+    pub fn is_key_released(&self, key: KeyCode) -> bool {
+        !self.get_key_state(key).pressed
+    }
+
+    pub fn is_key_clicked(&self, key: KeyCode) -> bool {
+        let state = self.get_key_state(key);
+        state.pressed && state.changed
     }
 }
 
@@ -43,11 +54,18 @@ impl Input {
         }
     }
 
-    pub fn on_key_state_change(&mut self, key: Key, new_state: KeyState) {
+    pub fn on_key_state_change(&mut self, key: KeyCode, is_pressed: bool) {
         if let Some(key_state) = self.state.keys.get_mut(&key) {
-            *key_state = new_state;
+            key_state.pressed = is_pressed;
+            key_state.changed = true;
         } else {
-            self.state.keys.insert(key, new_state);
+            self.state.keys.insert(key, KeyState { pressed: is_pressed, changed: true });
+        }
+    }
+
+    pub fn clear_changed(&mut self) {
+        for (_, state) in &mut self.state.keys {
+            state.changed = false;
         }
     }
 
