@@ -5,13 +5,132 @@
 /// `Last changed` 17.02.2024
 
 pub mod math;
+
 pub mod render;
 pub mod timer;
 pub mod input;
 
+use std::io::Read;
+
 use math::*;
 
-fn camera_keyboard_control(camera: &mut render::camera::Camera, input_state: &input::State, delta_time: f32) {
+struct ParsedObj {
+    pub vertices: Vec<render::Vertex>,
+    pub indices: Vec<u32>,
+}
+
+fn load_obj(path: &str) -> Result<ParsedObj, String> {
+    let source = {
+        let mut file = std::fs::File::open(path).map_err(|err| err.to_string())?;
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer).map_err(|err| err.to_string())?;
+        buffer
+    };
+
+    let mut positions = Vec::<Vec3f>::new();
+    let mut tex_coords = Vec::<Vec2f>::new();
+    let mut normals = Vec::<Vec3f>::new();
+
+    positions.push(Vec3f::new(0.0, 0.0, 0.0));
+    tex_coords.push(Vec2f::new(0.0, 0.0));
+    normals.push(Vec3f::new(0.0, 0.0, 0.0));
+
+    let mut vertex_index_map = std::collections::BTreeMap::<(u32, u32, u32), u32>::new();
+    let mut vertices = Vec::<render::Vertex>::new();
+    let mut indices = Vec::<u32>::new();
+
+    for line in source.lines() {
+        let mut blocks = line.split(' ');
+
+        let block_type = match blocks.next() {
+            Some(t) => t.trim(),
+            None => continue,
+        };
+
+        match block_type {
+            "v" => positions.push(match blocks.next().zip(blocks.next()).zip(blocks.next()) {
+                Some(((sx, sy), sz)) => Vec3f::new(
+                    sx.trim().parse::<f32>().unwrap_or(0.0),
+                    sy.trim().parse::<f32>().unwrap_or(0.0),
+                    sz.trim().parse::<f32>().unwrap_or(0.0)
+                ),
+                None => Vec3f::new(0.0, 0.0, 0.0)
+            }),
+
+            "vt" => tex_coords.push(match blocks.next().zip(blocks.next()) {
+                Some((sx, sy)) => Vec2f::new(
+                    sx.trim().parse::<f32>().unwrap_or(0.0),
+                    sy.trim().parse::<f32>().unwrap_or(0.0),
+                ),
+                None => Vec2f::new(0.0, 0.0)
+            }),
+
+            "vn" => normals.push(match blocks.next().zip(blocks.next()).zip(blocks.next()) {
+                Some(((sx, sy), sz)) => Vec3f::new(
+                    sx.trim().parse::<f32>().unwrap_or(0.0),
+                    sy.trim().parse::<f32>().unwrap_or(0.0),
+                    sz.trim().parse::<f32>().unwrap_or(0.0)
+                ),
+                None => Vec3f::new(0.0, 0.0, 0.0)
+            }),
+
+            "f" => {
+                // Index from blocks iterator
+                if blocks.clone().count() == 4 {
+
+                }
+                let mut idx = blocks.map(|vertex| {
+                    let mut vti = vertex.split('/');
+
+                    let tup = (
+                        vti.next().map_or(0, |str| str.trim().parse::<u32>().unwrap_or(0)),
+                        vti.next().map_or(0, |str| str.trim().parse::<u32>().unwrap_or(0)),
+                        vti.next().map_or(0, |str| str.trim().parse::<u32>().unwrap_or(0))
+                    );
+
+                    if let Some(entry) = vertex_index_map.get(&tup) {
+                        *entry
+                    } else {
+                        let i = vertices.len() as u32;
+                        vertex_index_map.insert(tup, i);
+                        vertices.push(render::Vertex {
+                            position: *positions.get(tup.0 as usize).unwrap_or(&Vec3f::new(0.0, 0.0, 0.0)),
+                            tex_coord: *tex_coords.get(tup.1 as usize).unwrap_or(&Vec2f::new(0.0, 0.0)),
+                            normal: *normals.get(tup.2 as usize).unwrap_or(&Vec3f::new(0.0, 0.0, 0.0)),
+                        });
+                        i
+                    }
+                });
+
+
+                let ibase = idx.next().unwrap();
+                let mut i = idx.next().unwrap();
+
+                'face_parsing: loop {
+                    let inew = match idx.next() {
+                        Some(i) => i,
+                        None => break 'face_parsing
+                    };
+
+                    indices.push(ibase);
+                    indices.push(i);
+                    indices.push(inew);
+
+                    i = inew;
+                }
+            },
+
+            _ => {},
+        }
+    }
+
+    Ok(ParsedObj {
+        vertices,
+        indices
+    })
+}
+
+fn camera_keyboard_control(camera: &mut render::Camera, input_state: &input::State, delta_time: f32) {
     let move_axis = Vec3f::new(
         (input_state.is_key_pressed(winit::keyboard::KeyCode::KeyD) as i32 - input_state.is_key_pressed(winit::keyboard::KeyCode::KeyA) as i32) as f32,
         (input_state.is_key_pressed(winit::keyboard::KeyCode::KeyR) as i32 - input_state.is_key_pressed(winit::keyboard::KeyCode::KeyF) as i32) as f32,
@@ -68,6 +187,22 @@ fn main() {
     let mut timer = timer::Timer::new();
     let mut input = input::Input::new();
 
+    let mut model = {
+        let model_obj = load_obj("models/e1m1.obj").unwrap();
+
+        render.create_primitive(&render::PrimitiveDescriptor {
+            indices: Some(&model_obj.indices),
+            vertices: &model_obj.vertices,
+            material: &render::Material {
+                base_color: Vec3f::new(1.0, 1.0, 1.0),
+                roughness: 0.5,
+                metallic: 0.5,
+            },
+        })
+    };
+
+    model.lock_transforms().push(render::WorldMatrixBufferElement { transform: math::Mat4x4f::identity() });
+
     let mut triangle = render.create_primitive(&render::PrimitiveDescriptor {
         indices: None,
         vertices: &[
@@ -122,17 +257,18 @@ fn main() {
                         }
                         frame_index += 1;
 
-                        {
-                            let transforms = triangle.lock_transforms();
-                            let mat = render::WorldMatrixBufferElement { transform: math::Mat4x4f::rotate_y(timer.get_time()) };
-                            if transforms.is_empty() {
-                                transforms.push(mat);
-                            } else {
-                                transforms[0] = mat;
-                            }
-                        }
+                        // {
+                        //     let transforms = triangle.lock_transforms();
+                        //     let mat = render::WorldMatrixBufferElement { transform: math::Mat4x4f::rotate_y(timer.get_time()) };
+                        //     if transforms.is_empty() {
+                        //         transforms.push(mat);
+                        //     } else {
+                        //         transforms[0] = mat;
+                        //     }
+                        // }
 
                         let mut scene = render.create_scene();
+                        scene.draw_primitive(&model);
                         scene.draw_primitive(&triangle);
 
                         camera_keyboard_control(render.lock_camera(), input.get_state(), timer.get_delta_time());

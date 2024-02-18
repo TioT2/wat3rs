@@ -1,4 +1,9 @@
-/**/
+/// WAT3RS Project
+/// `File` render/primitive.wgsl
+/// `Description` Primitive shader script.
+/// `Author` TioT2
+/// `Last changed` 17.02.2024
+
 struct Vertex {
     @location(0) position: vec3f,
     @location(1) texcoord: vec2f,
@@ -52,5 +57,7 @@ fn vs_main(vertex: Vertex) -> VsOut {
 
 @fragment
 fn fs_main(vs_out: VsOut) -> @location(0) vec4f {
-    return vec4f(primitive_data.base_color * abs(dot(normalize(vs_out.normal), normalize(vec3f(1.0, 1.0, 1.0)))), 255.0);
+    return vec4f(primitive_data.base_color * clamp(dot(normalize(vs_out.normal), normalize(vec3f(0.30, 0.47, 0.80))), 0.1, 1.0), 255.0);
 }
+
+// file primitive.wgsl

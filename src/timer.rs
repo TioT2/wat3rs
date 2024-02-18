@@ -1,4 +1,4 @@
-
+/// Timer representation structure
 pub struct Timer {
     start_time_point: std::time::Instant,
     time_point: std::time::Instant,
@@ -11,6 +11,8 @@ pub struct Timer {
 }
 
 impl Timer {
+    /// Timer constructor.
+    /// * Returns newly created timer with count, starting from creation moment
     pub fn new() -> Self {
         let now = std::time::Instant::now();
         Self {
@@ -25,12 +27,24 @@ impl Timer {
         }
     }
 
+    /// Timer resetting function.
+    /// Sets timer starting point to 0.
+    pub fn reset_time(&mut self) {
+        let now = std::time::Instant::now();
+        self.start_time_point = now.clone();
+        self.time_point = now.clone();
+        self.fps_time_point = now.clone();
+        self.fps_counter = 0;
+
+        self.time = 0.0;
+    }
+
+    /// Timer duration update function.
     pub fn response(&mut self) {
         let now = std::time::Instant::now();
 
         self.time = (now - self.start_time_point).as_secs_f32();
         self.delta_time = (now - self.time_point).as_secs_f32();
-
 
         self.fps_counter += 1;
 
@@ -44,14 +58,17 @@ impl Timer {
         self.time_point = now;
     }
 
+    /// Time getting function
     pub fn get_time(&self) -> f32 {
         self.time
     }
 
+    /// Time between neighbour updates getting function
     pub fn get_delta_time(&self) -> f32 {
         self.delta_time
     }
 
+    /// FPS getting function
     pub fn get_fps(&self) -> f32 {
         self.fps
     }

@@ -1,14 +1,16 @@
-/// ANIM-RS Project
+/// WAT3RS Project
 /// `File` util/math/mod.rs
 /// `Description` Math main declaration module
 /// `Author` TioT2
-/// `Last changed` 17.12.2023
+/// `Last changed` 18.02.2024
 
-pub mod vec;
+mod vecn;
+
 pub mod mat;
+pub mod vec;
 
-pub use vec::{Vec2, Vec3, Vec4};
-pub use mat::Mat4x4;
+pub use vec::*;
+pub use mat::*;
 
 pub type Mat4x4f = Mat4x4<f32>;
 
@@ -26,6 +28,5 @@ pub type Vec4u = Vec4<u32>;
 
 /// Floating point mat4 functionality re-exporting
 mod mat4x4_f32;
-pub use mat4x4_f32::*;
 
 // file mod.rs

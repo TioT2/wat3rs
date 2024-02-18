@@ -1,12 +1,20 @@
+use std::sync::Arc;
+
 /// WAT3RS Project
 /// `File` render/mod.rs
-/// `Description` Main render implementation file
+/// `Description` Main render implementation module
 /// `Author` TioT2
 /// `Last changed` 17.02.2024
 
 pub use crate::math::*;
 
-pub mod camera;
+mod camera;
+mod kernel;
+mod texture;
+
+pub use camera::*;
+pub use kernel::*;
+pub use texture::*;
 
 /// Vertex content represetnation structure
 #[repr(packed)]
@@ -85,199 +93,63 @@ pub struct PrimitiveDescriptor<'a> {
 
 /// Rendering primitive representation structure
 pub struct Primitive {
-    // primitive bind group:
-    // primitive uniform
-
     uniform_buffer: wgpu::Buffer,
     primitive_bind_group: wgpu::BindGroup,
 
-    vertex_buffer: wgpu::Buffer, // primitive vertex and index buffer
+    vertex_buffer: wgpu::Buffer,
     vertex_count: usize,
 
-    index_buffer: wgpu::Buffer, // primitive vertex and index buffer
+    index_buffer: wgpu::Buffer,
     index_count: usize,
 
     world_transforms: Vec<WorldMatrixBufferElement>,
-}
+} // struct Primitive
 
 impl Primitive {
     /// Lock all instances
+    /// * Returns mutable reference to world matrix buffer
     pub fn lock_transforms<'transform_lock>(&'transform_lock mut self) -> &'transform_lock mut Vec<WorldMatrixBufferElement> {
         &mut self.world_transforms
-    }
+    } // fn lock_transforms
+} // impl Primitive
+
+pub struct Target {
+    position_id: Texture,
+    normal_instance: Texture,
+    base_color_opcaity: Texture,
+    metallic_roughness_occlusion_meta: Texture,
+    depth: Texture,
 }
 
-struct Core<'a> {
-    window: std::sync::Arc<winit::window::Window>,
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    surface: wgpu::Surface<'a>,
-    queue: wgpu::Queue,
-    surface_config: wgpu::SurfaceConfiguration,
-}
-
-impl<'a> Core<'a> {
-    pub fn new(window: std::sync::Arc<winit::window::Window>) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::GL,
-            flags: wgpu::InstanceFlags::VALIDATION,
-            ..Default::default()
-        });
-
-        let surface: wgpu::Surface<'a> = instance.create_surface(window.clone()).map_err(|err| err.to_string())?;
-
-        let adapter = futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions{
-            compatible_surface: Some(&surface),
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        })).ok_or("Error requesting fitting adapter".to_string())?;
-
-        let (device, queue) = futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor{
-            ..Default::default()
-        }, None)).map_err(|err| err.to_string())?;
-
-        let surface_format = {
-            let fmts = surface.get_capabilities(&adapter).formats;
-
-            if fmts.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
-                wgpu::TextureFormat::Bgra8UnormSrgb
-            } else {
-                fmts[0]
-            }
-        };
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            format: surface_format,
-            width: window.inner_size().width,
-            height: window.inner_size().height,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            present_mode: wgpu::PresentMode::AutoVsync,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: vec![surface_format],
-            desired_maximum_frame_latency: 2,
-        };
-
-        surface.configure(&device, &surface_config);
-
-        Ok(Self {
-            window,
-            instance,
-            adapter,
-            device,
-            queue,
-            surface,
-            surface_config,
-        })
-    }
-
-    fn check_surface_compatiblity(&self, surface: &wgpu::Surface) -> bool {
-        self.adapter.is_surface_supported(surface)
-    }
-
-    pub fn get_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
-        self.surface.get_current_texture().map_or_else(
-            |err| {
-                match err {
-                    wgpu::SurfaceError::Lost => {
-                        let new_surface = self.instance.create_surface(self.window.clone()).unwrap();
-
-                        if !self.check_surface_compatiblity(&new_surface) {
-                            panic!("New surface isn't compatible");
-                        }
-
-                        self.surface = new_surface;
-                    }
-                    wgpu::SurfaceError::OutOfMemory => {
-                        panic!("WebGPU is out of memory");
-                    }
-                    wgpu::SurfaceError::Outdated => {
-                        let surface_size = self.window.inner_size();
-                        self.surface_config.width = surface_size.width;
-                        self.surface_config.height = surface_size.height;
-                    }
-                    wgpu::SurfaceError::Timeout => {
-                        panic!("WebGPU frame request reached it's timeout!");
-                    }
-                }
-
-                if self.surface_config.width == 0 || self.surface_config.height == 0 {
-                    return None;
-                }
-                self.surface.configure(&self.device, &self.surface_config);
-                self.surface.get_current_texture().ok() // )))
-            },
-            |value| {
-                Some(value)
-            }
-        )
-    }
-}
-
-struct Texture {
-    texture: wgpu::Texture,
-    texture_view: wgpu::TextureView,
-
-    extent: Vec2<usize>,
-    format: wgpu::TextureFormat,
-}
-
-pub struct Render<'a> {
-    core: Core<'a>,
-
-    depth_texture: Texture,
-
-    camera_buffer: wgpu::Buffer,
-    world_matrix_buffer: wgpu::Buffer,
-    matrix_buffer: wgpu::Buffer,
-    matrix_capacity: usize,
-    matrix_count: usize,
-
-    primitive_pipeline: wgpu::RenderPipeline,
-    primitive_pipeline_layout: wgpu::PipelineLayout,
-    primitive_system_bind_group_layout: wgpu::BindGroupLayout,
-    primitive_data_bind_group_layout: wgpu::BindGroupLayout,
-    primitive_system_bind_group: wgpu::BindGroup,
-
-    matrix_pipeline: wgpu::ComputePipeline,
-    matrix_pipeline_layout: wgpu::PipelineLayout,
-    matrix_bind_group_layout: wgpu::BindGroupLayout,
-    matrix_bind_group: wgpu::BindGroup,
-
-    camera: camera::Camera,
-}
-
-impl<'a> Render<'a> {
+impl Kernel {
     /// Matrix buffers create function
-    /// * `core` - render core
     /// * `capacity` - matrix buffers capacity
     /// * Returns (world matrix buffer, matrix buffer) tuple.
-    fn create_matrix_buffers(core: &Core, capacity: usize) -> (wgpu::Buffer, wgpu::Buffer) {
+    fn create_matrix_buffers(&self, capacity: usize) -> (wgpu::Buffer, wgpu::Buffer) {
         return (
-            core.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 mapped_at_creation: false,
                 size: (capacity * std::mem::size_of::<WorldMatrixBufferElement>()) as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             }),
-            core.device.create_buffer(&wgpu::BufferDescriptor {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 mapped_at_creation: false,
                 size: (capacity * std::mem::size_of::<MatrixBufferElement>()) as u64,
                 usage: wgpu::BufferUsages::STORAGE,
             }),
         );
-    }
+    } // fn create_matrix_buffers
 
     /// System bind groups create function
-    /// * `core` - render core
     /// * `primitive_system_bind_group_layout` - first bind group layout
     /// * `matrix_bind_group_layout` - second bind group layout
     /// * `camera_buffer` - camera buffer
     /// * `world_matrix_buffer` - buffer for with world matrix to be placed in
     /// * `matrix_buffer` - buffer result matrix will be placed in
     /// * Returns (primitive_system_bind_group, matix_bind_group)
-    fn build_bind_groups(core: &Core,
+    fn build_bind_groups(&self,
         primitive_system_bind_group_layout: &wgpu::BindGroupLayout,
         matrix_bind_group_layout: &wgpu::BindGroupLayout,
         camera_buffer: &wgpu::Buffer,
@@ -285,7 +157,7 @@ impl<'a> Render<'a> {
         matrix_buffer: &wgpu::Buffer
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         (
-            core.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &primitive_system_bind_group_layout,
                 entries: &[
@@ -309,7 +181,7 @@ impl<'a> Render<'a> {
                     })},
                 ]
             }),
-            core.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &matrix_bind_group_layout,
                 entries: &[
@@ -334,47 +206,103 @@ impl<'a> Render<'a> {
                 ],
             })
         )
-    }
+    } // fn build_bind_groups
 
-    pub fn new(window: std::sync::Arc<winit::window::Window>) -> Result<Render<'a>, String> {
-        let core = Core::new(window)?;
-
-        // Initialize render target
-        let depth_texture = {
-            let depth_format = wgpu::TextureFormat::Depth24Plus;
-
-            let texture = core.device.create_texture(&wgpu::TextureDescriptor {
-                dimension: wgpu::TextureDimension::D2,
-                format: depth_format,
-                mip_level_count: 1,
-                sample_count: 1,
-                size: wgpu::Extent3d {width: core.surface_config.width, height: core.surface_config.height, depth_or_array_layers: 1},
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[depth_format],
-                label: None,
-            });
-
-            Texture {
-                extent: Vec2::<usize>::new(core.surface_config.width as usize, core.surface_config.height as usize),
-                format: wgpu::TextureFormat::Depth24Plus,
-                texture_view: texture.create_view(&wgpu::TextureViewDescriptor { ..Default::default() }),
-                texture,
-            }
+    /// Target create function
+    /// * `extent` - target extent
+    /// * Returns created target
+    fn create_target(&self, extent: Vec2<usize>) -> Target {
+        let extent = wgpu::Extent3d {
+            width: extent.x as u32,
+            height: extent.y as u32,
+            depth_or_array_layers: 1,
         };
+        let descriptor = wgpu::TextureDescriptor {
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            label: None,
+            mip_level_count: 1,
+            sample_count: 1,
+            size: extent,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[wgpu::TextureFormat::Rgba32Float]
+        };
+        Target {
+            position_id: self.create_texture(&wgpu::TextureDescriptor {
+                format: wgpu::TextureFormat::Rgba32Float,
+                view_formats: &[wgpu::TextureFormat::Rgba32Float],
+                ..descriptor
+            }),
+            normal_instance: self.create_texture(&wgpu::TextureDescriptor {
+                format: wgpu::TextureFormat::Rgba16Sint,
+                view_formats: &[wgpu::TextureFormat::Rgba16Sint],
+                ..descriptor
+            }),
+            base_color_opcaity: self.create_texture(&wgpu::TextureDescriptor {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                ..descriptor
+            }),
+            metallic_roughness_occlusion_meta: self.create_texture(&wgpu::TextureDescriptor {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                ..descriptor
+            }),
+            depth: self.create_texture(&wgpu::TextureDescriptor {
+                format: wgpu::TextureFormat::Depth24Plus,
+                view_formats: &[wgpu::TextureFormat::Depth24Plus],
+                ..descriptor
+            })
+        }
+    } // fn create_target
+}
 
-        let primitive_shader = core.device.create_shader_module(wgpu::ShaderModuleDescriptor{
+/// Renderer representation structure
+pub struct Render<'a> {
+    kernel: Arc<Kernel>,
+    surface: Surface<'a>,
+
+    target: Target,
+    // target_bind_group_layout: wgpu::BindGroupLayout,
+    // target_bind_group: wgpu::BindGroup,
+
+    camera_buffer: wgpu::Buffer,
+    world_matrix_buffer: wgpu::Buffer,
+    matrix_buffer: wgpu::Buffer,
+    matrix_capacity: usize,
+    matrix_count: usize,
+
+    primitive_pipeline: wgpu::RenderPipeline,
+    primitive_system_bind_group_layout: wgpu::BindGroupLayout,
+    primitive_data_bind_group_layout: wgpu::BindGroupLayout,
+    primitive_system_bind_group: wgpu::BindGroup,
+
+    matrix_pipeline: wgpu::ComputePipeline,
+    matrix_bind_group_layout: wgpu::BindGroupLayout,
+    matrix_bind_group: wgpu::BindGroup,
+
+    camera: Camera,
+} // struct Render<'a>
+
+impl<'a> Render<'a> {
+    pub fn new(window: std::sync::Arc<winit::window::Window>) -> Result<Render<'a>, String> {
+        let (kernel, surface) = Kernel::new(window)?;
+
+        let target = kernel.create_target(surface.get_extent());
+
+        let primitive_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
             label: None,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("primitive.wgsl"))),
         });
-        let matrix_shader = core.device.create_shader_module(wgpu::ShaderModuleDescriptor{
+        let matrix_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
             label: None,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("matrix.wgsl")))
         });
 
         let matrix_capacity = 32usize;
-        let (world_matrix_buffer, matrix_buffer) = Self::create_matrix_buffers(&core, matrix_capacity);
+        let (world_matrix_buffer, matrix_buffer) = kernel.create_matrix_buffers(matrix_capacity);
 
-        let camera_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
+        let camera_buffer = kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             size: std::mem::size_of::<CameraBufferData>() as u64,
@@ -382,7 +310,7 @@ impl<'a> Render<'a> {
         });
 
 
-        let primitive_data_bind_group_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let primitive_data_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
                 /* Primitive offset and material UBO */
@@ -399,7 +327,7 @@ impl<'a> Render<'a> {
             ],
         });
 
-        let primitive_system_bind_group_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let primitive_system_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
                 /* Camera UBO */
@@ -438,13 +366,13 @@ impl<'a> Render<'a> {
             ],
         });
 
-        let primitive_pipeline_layout = core.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let primitive_pipeline_layout = kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[&primitive_system_bind_group_layout, &primitive_data_bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let primitive_pipeline = core.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let primitive_pipeline = kernel.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&primitive_pipeline_layout),
 
@@ -452,7 +380,7 @@ impl<'a> Render<'a> {
                 bias: wgpu::DepthBiasState {..Default::default()},
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 depth_write_enabled: true,
-                format: depth_texture.format,
+                format: target.depth.get_texture().format(),
                 stencil: wgpu::StencilState {
                     front: wgpu::StencilFaceState::IGNORE,
                     back: wgpu::StencilFaceState::IGNORE,
@@ -463,17 +391,43 @@ impl<'a> Render<'a> {
             fragment: Some(wgpu::FragmentState {
                 entry_point: "fs_main",
                 module: &primitive_shader,
-                targets: &[Some(wgpu::ColorTargetState {
-                    blend: None,
-                    format: core.surface_config.format,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: surface.get_format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    // /* position_id */
+                    // Some(wgpu::ColorTargetState {
+                    //     blend: None,
+                    //     format: target.position_id.get_texture().format(),
+                    //     write_mask: wgpu::ColorWrites::ALL,
+                    // }),
+                    // /* normal_instance */
+                    // Some(wgpu::ColorTargetState {
+                    //     blend: None,
+                    //     format: target.normal_instance.get_texture().format(),
+                    //     write_mask: wgpu::ColorWrites::ALL,
+                    // }),
+                    // /* base_color_opcaity */
+                    // Some(wgpu::ColorTargetState {
+                    //     blend: None,
+                    //     format: target.base_color_opcaity.get_texture().format(),
+                    //     write_mask: wgpu::ColorWrites::ALL,
+                    // }),
+                    // /* metallic_roughness_occlusion_meta */
+                    // Some(wgpu::ColorTargetState {
+                    //     blend: None,
+                    //     format: target.metallic_roughness_occlusion_meta.get_texture().format(),
+                    //     write_mask: wgpu::ColorWrites::ALL,
+                    // }),
+                ],
             }),
             multisample: Default::default(),
             multiview: None,
             primitive: wgpu::PrimitiveState {
                 conservative: false,
-                cull_mode: None,
+                cull_mode: Some(wgpu::Face::Back),
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
                 polygon_mode: wgpu::PolygonMode::Fill,
@@ -510,7 +464,7 @@ impl<'a> Render<'a> {
             },
         });
 
-        let matrix_bind_group_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let matrix_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
                 /* Camera buffer */
@@ -549,21 +503,20 @@ impl<'a> Render<'a> {
             ]
         });
 
-        let matrix_pipeline_layout = core.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let matrix_pipeline_layout = kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             push_constant_ranges: &[],
             bind_group_layouts: &[&matrix_bind_group_layout],
         });
 
-        let matrix_pipeline = core.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let matrix_pipeline = kernel.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
             entry_point: "cs_main",
             layout: Some(&matrix_pipeline_layout),
             module: &matrix_shader,
         });
 
-        let (primitive_system_bind_group, matrix_bind_group) = Self::build_bind_groups(
-            &core,
+        let (primitive_system_bind_group, matrix_bind_group) = kernel.build_bind_groups(
             &primitive_system_bind_group_layout,
             &matrix_bind_group_layout,
             &camera_buffer,
@@ -573,19 +526,18 @@ impl<'a> Render<'a> {
 
         /* RENDER INITIALIZATION, MAZAFAKA */
         Ok(Self {
-            core,
+            kernel,
+            surface,
             camera_buffer,
-            depth_texture,
+            target,
             matrix_bind_group,
             matrix_bind_group_layout,
             matrix_buffer,
             matrix_capacity,
             matrix_count: 0usize,
             matrix_pipeline,
-            matrix_pipeline_layout,
             primitive_data_bind_group_layout,
             primitive_pipeline,
-            primitive_pipeline_layout,
             primitive_system_bind_group,
             primitive_system_bind_group_layout,
             world_matrix_buffer,
@@ -601,7 +553,7 @@ impl<'a> Render<'a> {
         let loc = self.camera.get_location();
         let matrices = self.camera.get_matrices();
 
-        self.core.queue.write_buffer(&self.camera_buffer, 0, unsafe {
+        self.kernel.queue.write_buffer(&self.camera_buffer, 0, unsafe {
             std::slice::from_raw_parts(std::mem::transmute(&CameraBufferData {
                 view_matrix: matrices.view,
                 projection_matrix: matrices.projection,
@@ -621,13 +573,13 @@ impl<'a> Render<'a> {
     /// * `descriptor` - created primitive descriptor
     /// * Returns created primitive
     pub fn create_primitive(&mut self, descriptor: &PrimitiveDescriptor) -> Primitive {
-        let uniform_buffer = self.core.device.create_buffer(&wgpu::BufferDescriptor {
+        let uniform_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             size: std::mem::size_of::<PrimitiveBufferData>() as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
-        self.core.queue.write_buffer(&uniform_buffer, 0, unsafe {
+        self.kernel.queue.write_buffer(&uniform_buffer, 0, unsafe {
             std::slice::from_raw_parts(std::mem::transmute(&PrimitiveBufferData {
                 base_color: descriptor.material.base_color,
                 primitive_index: 0,
@@ -636,7 +588,7 @@ impl<'a> Render<'a> {
             }), std::mem::size_of::<PrimitiveBufferData>())
         });
 
-        let primitive_bind_group = self.core.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let primitive_bind_group = self.kernel.device.create_bind_group(&wgpu::BindGroupDescriptor {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -649,24 +601,24 @@ impl<'a> Render<'a> {
             layout: &self.primitive_data_bind_group_layout,
         });
 
-        let vertex_buffer = self.core.device.create_buffer(&wgpu::BufferDescriptor {
+        let vertex_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             size: (std::mem::size_of::<Vertex>() * descriptor.vertices.len()) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         });
-        self.core.queue.write_buffer(&vertex_buffer, 0, unsafe {
+        self.kernel.queue.write_buffer(&vertex_buffer, 0, unsafe {
             std::slice::from_raw_parts(std::mem::transmute(descriptor.vertices.as_ptr()), descriptor.vertices.len() * std::mem::size_of::<Vertex>())
         });
 
-        let index_buffer = self.core.device.create_buffer(&wgpu::BufferDescriptor {
+        let index_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             size: descriptor.indices.map_or(0, |idx| (std::mem::size_of::<u32>() * idx.len()) as u64),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::INDEX,
         });
         _ = descriptor.indices.map_or((), |idx| {
-            self.core.queue.write_buffer(&index_buffer, 0, unsafe {
+            self.kernel.queue.write_buffer(&index_buffer, 0, unsafe {
                 std::slice::from_raw_parts(std::mem::transmute(idx.as_ptr()), idx.len() * std::mem::size_of::<u32>())
             });
         });
@@ -688,12 +640,12 @@ impl<'a> Render<'a> {
         Scene {
             primitives: Vec::new(),
         }
-    }
+    } // fn create_scene
 
     /// Scene rendering and presentation requesting function
     /// * `scene` - scene to render
     pub fn render_scene(&mut self, scene: &Scene) {
-        let surface_texture = match self.core.get_surface_texture() {
+        let surface_texture = match self.surface.get_texture() {
             Some(tex) => tex,
             None => return
         };
@@ -712,8 +664,8 @@ impl<'a> Render<'a> {
             self.matrix_capacity = required_matrix_capacity;
             self.matrix_count = required_matrix_capacity;
             // Update buffers and write them
-            (self.world_matrix_buffer, self.matrix_buffer) = Self::create_matrix_buffers(&self.core, self.matrix_capacity);
-            (self.primitive_system_bind_group, self.matrix_bind_group) = Self::build_bind_groups(&self.core, &self.primitive_system_bind_group_layout, &self.matrix_bind_group_layout, &self.camera_buffer, &self.world_matrix_buffer, &self.matrix_buffer);
+            (self.world_matrix_buffer, self.matrix_buffer) = self.kernel.create_matrix_buffers(self.matrix_capacity);
+            (self.primitive_system_bind_group, self.matrix_bind_group) = self.kernel.build_bind_groups(&self.primitive_system_bind_group_layout, &self.matrix_bind_group_layout, &self.camera_buffer, &self.world_matrix_buffer, &self.matrix_buffer);
         }
 
         // rewrite offsets and matrices
@@ -722,10 +674,10 @@ impl<'a> Render<'a> {
 
             for primitive in &scene.primitives {
                 // Write index into uniform buffer
-                self.core.queue.write_buffer(&primitive.uniform_buffer, PRIMITIVE_BUFFER_DATA_PRIMITIVE_INDEX_OFFSET as u64, &(offset as u32).to_le_bytes());
+                self.kernel.queue.write_buffer(&primitive.uniform_buffer, PRIMITIVE_BUFFER_DATA_PRIMITIVE_INDEX_OFFSET as u64, &(offset as u32).to_le_bytes());
 
                 // Write matrices into world matrix buffer
-                self.core.queue.write_buffer(&self.world_matrix_buffer, (offset * std::mem::size_of::<WorldMatrixBufferElement>()) as u64, unsafe {
+                self.kernel.queue.write_buffer(&self.world_matrix_buffer, (offset * std::mem::size_of::<WorldMatrixBufferElement>()) as u64, unsafe {
                     std::slice::from_raw_parts(
                         std::mem::transmute(primitive.world_transforms.as_ptr()),
                         primitive.world_transforms.len() * std::mem::size_of::<WorldMatrixBufferElement>()
@@ -740,7 +692,7 @@ impl<'a> Render<'a> {
         self.update_camera_buffer();
 
         {
-            let mut command_encoder = self.core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { ..Default::default() });
+            let mut command_encoder = self.kernel.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { ..Default::default() });
 
             // Recalculate world-view-projection matrices
             {
@@ -750,7 +702,7 @@ impl<'a> Render<'a> {
                 compute_pass.dispatch_workgroups(self.matrix_count as u32, 1, 1);
             }
 
-            // Perform render pass
+            // `[Geometry] -> Target` render pass
             {
                 let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: &[
@@ -764,19 +716,21 @@ impl<'a> Render<'a> {
                         })
                     ],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        depth_ops: Some(wgpu::Operations::<f32> {
+                        depth_ops: Some(wgpu::Operations {
                             load: wgpu::LoadOp::Clear(1.0),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
-                        view: &self.depth_texture.texture_view,
+                        view: &self.target.depth.get_view(),
                     }),
                     ..Default::default()
                 });
-                render_pass.set_viewport(0.0, 0.0, self.core.surface_config.width as f32, self.core.surface_config.height as f32, 0.0, 1.0);
+                let ext = self.surface.get_extent();
+                render_pass.set_viewport(0.0, 0.0, ext.x as f32, ext.y as f32, 0.0, 1.0);
 
                 render_pass.set_pipeline(&self.primitive_pipeline);
                 render_pass.set_bind_group(0, &self.primitive_system_bind_group, &[]);
+
                 for primitive in &scene.primitives {
                     render_pass.set_bind_group(1, &primitive.primitive_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, primitive.vertex_buffer.slice(0..));
@@ -789,9 +743,14 @@ impl<'a> Render<'a> {
                 }
             }
 
+            // `Target -> Screen` render pass
+            {
+
+            }
+
             let command_buffer = command_encoder.finish();
 
-            self.core.queue.submit([command_buffer]);
+            self.kernel.queue.submit([command_buffer]);
             surface_texture.present();
         }
     }
@@ -803,7 +762,11 @@ pub struct Scene<'a> {
 }
 
 impl<'a> Scene<'a> {
+    /// Primitive displaying function
+    /// * `primitive` - primitive to display scene-lifetime reference
     pub fn draw_primitive(&mut self, primitive: &'a Primitive) {
         self.primitives.push(primitive);
-    }
-}
+    } // fn draw_primitive
+} // impl Scene
+
+// file mod.rs

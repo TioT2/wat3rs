@@ -6,36 +6,60 @@
 
 pub use crate::math::*;
 
+
+/// Camera in space position info representation structure
 #[derive(Copy, Clone)]
 pub struct Location {
+    /// Normalized vector from eye to point of view
     pub direction: Vec3f,
-    pub right: Vec3f,
-    pub up: Vec3f,
-    pub location: Vec3f,
-    pub at: Vec3f,
-}
 
+    /// Right direction
+    pub right: Vec3f,
+
+    /// Up direction
+    pub up: Vec3f,
+
+    /// Eye location
+    pub location: Vec3f,
+
+    /// Eye point of view
+    pub at: Vec3f,
+} // struct Location
+
+/// Camera projection representation structure
 #[derive(Copy, Clone)]
 pub struct Projection {
+    /// Projection size
     pub size: Vec2f,
-    pub near: f32,
-    pub far: f32,
-}
 
+    /// Projection near plane
+    pub near: f32,
+
+    /// Projection far plane
+    pub far: f32,
+} // struct Projection
+
+/// Camera projection matrix set representation structure
 #[derive(Copy, Clone)]
 pub struct Matrices {
+    /// View matrix
     pub view: Mat4x4f,
-    pub projection: Mat4x4f,
-    pub view_projection: Mat4x4f,
-}
 
+    /// Projection matrix
+    pub projection: Mat4x4f,
+
+    /// View matrix with projection matrix product, actually cached value
+    pub view_projection: Mat4x4f,
+} // struct Matrices
+
+/// Renderer camera representation structure
 #[derive(Copy, Clone)]
 pub struct Camera {
     location: Location,
     projection: Projection,
     matrices: Matrices,
     extent: Vec2<usize>,
-}
+} // struct camera
 
 impl Camera {
     /// Camera create function
@@ -88,25 +112,25 @@ impl Camera {
 
         self.matrices.view = view;
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
-    }
+    } // fn set
 
     /// Camera location getting function
     /// * Returns location info
     pub fn get_location(&self) -> &Location {
         &self.location
-    }
+    } // fn get_location
 
     /// Camera projection getting function
     /// * Returns projection info
     pub fn get_projection(&self) -> &Projection {
         &self.projection
-    }
+    } // fn get_projection
 
     /// Camera matrix getting function
     /// * Returns matrix info
     pub fn get_matrices(&self) -> &Matrices {
         &self.matrices
-    }
+    } // fn get_matrices
 
     /// Camera projection setting function
     /// * `near` - projection plane distance
@@ -125,7 +149,7 @@ impl Camera {
 
         self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.x / 2.0, proj_ext.x / 2.0, -proj_ext.y / 2.0, proj_ext.y / 2.0, self.projection.near, self.projection.far);
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
-    }
+    } // fn set_projection
 
     /// Camera fitting for new resolution
     /// * `new_extent` - new resolution
@@ -143,5 +167,5 @@ impl Camera {
 
         self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.x / 2.0, proj_ext.x / 2.0, -proj_ext.y / 2.0, proj_ext.y / 2.0, self.projection.near, self.projection.far);
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
-    }
-}
+    } // fn resize
+} // impl Camera

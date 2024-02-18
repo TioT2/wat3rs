@@ -1,11 +1,11 @@
-/// ANIM-RS Project
+/// WAT3RS Project
 /// `File` util/math/mat.rs
 /// `Description` Math 4x4 floating-point matrix implementation module
 /// `Author` TioT2
-/// `Last changed` 17.12.2023
+/// `Last changed` 18.02.2024
 
-use super::vec::*;
 use super::mat::*;
+use super::vec::*;
 
 /// Default matrices implementation
 impl Mat4x4<f32> {
