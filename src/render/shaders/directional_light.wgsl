@@ -52,6 +52,9 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
 const I16_MAX_F = f32(32767);
 const PI_F = 3.14159265357989;
 
+const INV_PI_F = 1.0 / PI_F;
+const INV_I16_MAX_F = 1.0 / I16_MAX_F;
+
 fn ggx_partial_geometry(cos_theta_n: f32, alpha: f32) -> f32
 {
     let cos_theta_sqr = cos_theta_n * cos_theta_n;
@@ -75,32 +78,29 @@ fn frensel_schlick(f0: vec3f, cos_theta: f32) -> vec3f
 
 @fragment
 fn fs_main(@builtin(position) frag_coord_4f: vec4f, @location(0) tex_coord: vec2f) -> @location(0) vec4f {
-
     let frag_coord = vec2i(frag_coord_4f.xy);
 
     let position = textureLoad(position_id, frag_coord, 0).xyz;
-    let normal = vec3f(textureLoad(normal_id, frag_coord, 0).xyz) / I16_MAX_F;
+    let normal = vec3f(textureLoad(normal_id, frag_coord, 0).xyz) * INV_I16_MAX_F;
     let color_opacity = textureLoad(color_opacity, frag_coord, 0);
     let metallic_roughness_occlusion_meta = textureLoad(metallic_roughness_occlusion_meta, frag_coord, 0);
 
-    // return vec4f(light_data.color * saturate(dot(normal, -light_data.direction)) * metallic_roughness_occlusion_meta.w, 1.0);
-
-    let nl = dot(normal, -light_data.direction);
-
+    let nl = -dot(normal, light_data.direction);
     let v = normalize(camera.location - position);
     let nv = dot(normal.xyz, v);
-
     let h = normalize(v - light_data.direction);
-    let nh = dot(normal, h);
-    let hv = dot(h, v);
+    // let nh = dot(normal, h);
+    // let hv = dot(h, v);
     let roughness_2 = metallic_roughness_occlusion_meta.y * metallic_roughness_occlusion_meta.y;
 
+    // let gxy = ggx_partial_geometry_2(vec2f(nv, nl), roughness_2);
+    // let g = gxy.x * gxy.y;
     let g = ggx_partial_geometry(nv, roughness_2) * ggx_partial_geometry(nl, roughness_2);
-    let d = ggx_distribution(nh, roughness_2);
-    let f = frensel_schlick(color_opacity.xyz, hv);
+    let d = ggx_distribution(dot(normal, h), roughness_2);
+    let f = frensel_schlick(color_opacity.xyz, dot(h, v));
 
     let spec = f * d * g * 0.25 / (nv + 0.01);
-    let diff = color_opacity.xyz * saturate(1.0 - f) * nl / PI_F;
+    let diff = color_opacity.xyz * saturate(1.0 - f) * nl * INV_PI_F;
 
     return vec4f(max(spec + diff, vec3f(0.0)) * light_data.color * metallic_roughness_occlusion_meta.w * f32(nl > 0) * f32(nv > 0), 1.0);
 } // fn fs_main

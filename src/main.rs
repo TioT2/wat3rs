@@ -330,44 +330,61 @@ impl Unit for CameraController {
     }
 }
 
+struct LightData {
+    light: render::DirectionalLight,
+    enabled: bool,
+}
+
 struct Light {
-    light1: render::DirectionalLight,
-    light2: render::DirectionalLight,
-    light3: render::DirectionalLight,
+    data: Vec<LightData>,
 }
 
 impl Light {
     pub fn new(render: &mut render::Render) -> Light {
-        Light {
-            light1: render.create_directional_light(&render::DirectionalLightDescriptor {
+        let sources = [
+            (render::DirectionalLightDescriptor {
+                color: Vec3f::new(1.0, 1.0, 1.0),
+                direction: -Vec3f::new(0.30, 0.47, 0.80),
+                power: 1.0,
+            }, false),
+            (render::DirectionalLightDescriptor {
                 color: Vec3f::new(0.0, 1.0, 1.0),
                 direction: -Vec3f::new(0.30, 0.47, 0.80),
-                power: 0.0,
-            }),
-            light2: render.create_directional_light(&render::DirectionalLightDescriptor {
+                power: 1.0,
+            }, true),
+            (render::DirectionalLightDescriptor {
                 color: Vec3f::new(1.0, 0.0, 0.0),
                 direction: -Vec3f::new(0.30, 0.47, -0.80),
-                power: 30.0,
-            }),
-            light3: render.create_directional_light(&render::DirectionalLightDescriptor {
+                power: 1.0,
+            }, true),
+            (render::DirectionalLightDescriptor {
                 color: Vec3f::new(1.0, 1.0, 0.0),
                 direction: -Vec3f::new(-0.30, 0.47, -0.80),
-                power: 30.0,
-            }),
+                power: 1.0,
+            }, true),
+        ];
+        Light {
+            data: sources.iter().map(|(descriptor, enabled)| {
+                LightData {
+                    enabled: *enabled,
+                    light: render.create_directional_light(descriptor),
+                }
+            }).collect()
         }
     }
 }
 
 impl Unit for Light {
     fn response<'a, 's, 'r>(&'a mut self, state: &mut SystemState<'s, 'a, 'r>) where 'r: 'a, 'a: 's {
-        if !state.input_state.is_key_pressed(input::KeyCode::Digit1) {
-            state.scene.add_directional_light(&mut self.light1);
-        }
-        if !state.input_state.is_key_pressed(input::KeyCode::Digit2) {
-            state.scene.add_directional_light(&mut self.light2);
-        }
-        if !state.input_state.is_key_pressed(input::KeyCode::Digit3) {
-            state.scene.add_directional_light(&mut self.light3);
+        let digits = [input::KeyCode::Digit0, input::KeyCode::Digit1, input::KeyCode::Digit2, input::KeyCode::Digit3];
+
+        for (light, digit) in self.data.iter_mut().zip(digits.iter()) {
+            if state.input_state.is_key_clicked(*digit) {
+                light.enabled = !light.enabled;
+            }
+            if light.enabled {
+                state.scene.add_directional_light(&mut light.light);
+            }
         }
     }
 }

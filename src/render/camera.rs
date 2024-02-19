@@ -78,7 +78,7 @@ impl Camera {
             projection: Projection {
                 size: Vec2f::new(1.0, 1.0),
                 near: 1.0,
-                far: 100.0,
+                far: 1.0,
             },
 
             matrices: Matrices {
@@ -91,7 +91,7 @@ impl Camera {
         };
 
         cam.resize(Vec2::<usize>::new(800, 600));
-        cam.set_projection(0.05, 100.0, Vec2f::new(0.1, 0.1));
+        cam.set_projection(0.05, 1024.0, Vec2f::new(0.1, 0.1));
 
         cam
     }
