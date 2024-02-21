@@ -1504,6 +1504,7 @@ name = "wat3rs"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "wasm-bindgen",
  "wgpu",
  "winit",
 ]

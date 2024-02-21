@@ -394,10 +394,15 @@ struct Model {
 }
 
 impl Model {
-    fn new(render: &mut render::Render, data: &ParsedObj) -> Model {
+    fn new(render: &mut render::Render, obj_pipeline: Arc<render::PrimitivePipeline>, data: &ParsedObj) -> Self {
         let mut primitive = render.create_primitive(&render::PrimitiveDescriptor {
+            pipeline: obj_pipeline,
             indices: Some(&data.indices),
-            vertices: &data.vertices,
+            vertices: &[
+                unsafe {
+                    std::slice::from_raw_parts(std::mem::transmute(data.vertices.as_ptr()), data.vertices.len() * std::mem::size_of::<render::Vertex>())
+                }
+            ],
             material: &render::Material {
                 base_color: Vec3f::new(1.00, 1.00, 1.00),
                 metallic: 1.0,
@@ -407,7 +412,7 @@ impl Model {
 
         primitive.lock_transforms().push(Mat4x4f::identity());
 
-        Model { primitive }
+        Self { primitive }
     }
 }
 
@@ -419,11 +424,12 @@ impl Unit for Model {
 
 struct Root {
     added: bool,
+    obj_pipeline: Option<Arc<render::PrimitivePipeline>>,
 }
 
 impl Root {
     pub fn new() -> Root {
-        Root { added: false }
+        Root { added: false, obj_pipeline: None, }
     }
 }
 
@@ -432,17 +438,35 @@ impl Unit for Root {
         if !self.added {
             state.scene_context.add_unit(Box::new(CameraController{}));
 
-            state.scene_context.add_unit(Box::new(Light::new(state.render)));
-            state.scene_context.add_unit(Box::new(Model::new(state.render, &parse_obj(include_str!("../models/rei.obj")).unwrap())));
-            state.scene_context.add_unit(Box::new(Model::new(state.render, &parse_obj(include_str!("../models/e1m1.obj")).unwrap())));
-            state.scene_context.add_unit(Box::new(Model::new(state.render, &parse_obj(include_str!("../models/cow.obj")).unwrap())));
+            self.obj_pipeline = state.render.create_primitive_pipeline(&render::PrimitivePipelineDescriptor {
+                shader_source: include_str!("render/shaders/primitive.wgsl"),
+                vertices: &[render::VertexBufferDescriptor {
+                    attributes: &[
+                        render::VertexAttributeDescriptor { format: render::VertexFormat::Float32x3, location: 0, offset:  0, },
+                        render::VertexAttributeDescriptor { format: render::VertexFormat::Float32x2, location: 1, offset: 12, },
+                        render::VertexAttributeDescriptor { format: render::VertexFormat::Float32x3, location: 2, offset: 20, },
+                    ],
+                    stride: 32,
+                }],
+                polygon_mode: render::PolygonMode::Fill,
+            }).ok();
+
+            if let Some(obj_pipeline) = &self.obj_pipeline {
+                state.scene_context.add_unit(Box::new(Light::new(state.render)));
+                state.scene_context.add_unit(Box::new(Model::new(state.render, obj_pipeline.clone(),  &parse_obj(include_str!("../models/rei.obj")).unwrap())));
+                state.scene_context.add_unit(Box::new(Model::new(state.render, obj_pipeline.clone(),  &parse_obj(include_str!("../models/e1m1.obj")).unwrap())));
+                state.scene_context.add_unit(Box::new(Model::new(state.render, obj_pipeline.clone(),  &parse_obj(include_str!("../models/cow.obj")).unwrap())));
+            }
 
             self.added = true;
         }
     }
 }
 
-fn main() {
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn main() {
     let mut system = System::new().unwrap();
 
     system.get_scene().add_unit(Box::new(Root::new()));

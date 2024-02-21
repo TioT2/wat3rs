@@ -5,6 +5,8 @@
 /// `Last changed` 17.02.2024
 
 use std::sync::Arc;
+use wgpu::core::device;
+
 use crate::math::*;
 
 /// Renderer most basic objects storage object representation structure
@@ -20,6 +22,8 @@ pub struct Kernel {
 
     /// WebGPU queue (execution queue)
     pub queue: wgpu::Queue,
+
+    pub device_features: wgpu::Features,
 } // struct Kernel
 
 /// Window surface representation structure
@@ -114,8 +118,13 @@ impl Kernel {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         })).ok_or("Error requesting fitting adapter".to_string())?;
+        let device_features = adapter.features() & (
+            wgpu::Features::POLYGON_MODE_LINE |
+            wgpu::Features::POLYGON_MODE_POINT
+        );
 
         let (device, queue) = futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor{
+            required_features: device_features,
             ..Default::default()
         }, None)).map_err(|err| err.to_string())?;
 
@@ -147,6 +156,7 @@ impl Kernel {
             device,
             instance,
             queue,
+            device_features,
         });
 
         Ok((

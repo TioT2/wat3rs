@@ -6,7 +6,7 @@
 
 struct Vertex {
     @location(0) position: vec3f,
-    @location(1) texcoord: vec2f,
+    @location(1) tex_coord: vec2f,
     @location(2) normal: vec3f,
 }
 
@@ -34,6 +34,7 @@ struct PrimitiveData {
     roughness: f32,
     metallic: f32,
 }
+
 
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> world_arr: array<mat4x4f>;

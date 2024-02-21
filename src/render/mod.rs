@@ -84,8 +84,63 @@ struct MatrixBufferElement {
     pub world_inverse_2: Vec3f,
 }
 
-/// Primitive create info
+pub enum IndexFormat {
+    U16,
+    U32,
+}
+
+pub type VertexFormat = wgpu::VertexFormat;
+pub type TopologyType = wgpu::PrimitiveTopology;
+pub type PolygonMode = wgpu::PolygonMode;
+
+pub struct VertexAttributeDescriptor {
+    pub offset: usize,
+    pub location: usize,
+    pub format: VertexFormat,
+}
+
+pub struct VertexBufferDescriptor<'a> {
+    pub stride: usize,
+    pub attributes: &'a [VertexAttributeDescriptor],
+}
+
+#[derive(Clone)]
+pub enum PrimitivePipelineCreateError {
+    ShaderCompilationError(String),
+    VertexComponentLocationDuplicate,
+}
+
+impl ToString for PrimitivePipelineCreateError {
+    fn to_string(&self) -> String {
+        match self {
+            Self::ShaderCompilationError(error) => format!("Shader compilation error: {error}"),
+            Self::VertexComponentLocationDuplicate => "Vertex component index occurs twice".to_string(),
+        }
+    } // fn to_string
+}
+
+pub struct PrimitivePipelineDescriptor<'a> {
+    pub shader_source: &'a str,
+    pub vertices: &'a [VertexBufferDescriptor<'a>],
+    pub polygon_mode: PolygonMode,
+}
+
+pub struct PrimitivePipeline {
+    // pipeline_layout: wgpu::PipelineLayout,
+    pipeline: wgpu::RenderPipeline,
+}
+
+
+/// Primitive descriptor with custom vertex format descriptor
 pub struct PrimitiveDescriptor<'a> {
+    pub pipeline: Arc<PrimitivePipeline>,
+    pub vertices: &'a [&'a [u8]],
+    pub indices: Option<&'a [u32]>,
+    pub material: &'a Material,
+} // pub struct CVTPrimitiveDescriptor
+
+/// Primitive create info
+pub struct PrimitiveDescriptorOld<'a> {
     pub vertices: &'a [Vertex],
     pub indices: Option<&'a [u32]>,
     pub material: &'a Material,
@@ -93,10 +148,11 @@ pub struct PrimitiveDescriptor<'a> {
 
 /// Rendering primitive representation structure
 pub struct Primitive {
+    pipeline: Arc<PrimitivePipeline>,
     uniform_buffer: wgpu::Buffer,
     primitive_bind_group: wgpu::BindGroup,
 
-    vertex_buffer: wgpu::Buffer,
+    vertex_buffers: Vec<wgpu::Buffer>,
     vertex_count: usize,
 
     index_buffer: wgpu::Buffer,
@@ -327,7 +383,6 @@ pub struct Render<'a> {
     matrix_capacity: usize,
     matrix_count: usize,
 
-    primitive_pipeline: wgpu::RenderPipeline,
     primitive_system_bind_group_layout: wgpu::BindGroupLayout,
     primitive_data_bind_group_layout: wgpu::BindGroupLayout,
     primitive_system_bind_group: wgpu::BindGroup,
@@ -345,10 +400,6 @@ impl<'a> Render<'a> {
 
         let target = kernel.create_target(surface.get_extent());
 
-        let primitive_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shaders/primitive.wgsl"))),
-        });
         let matrix_shader = kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor{
             label: None,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shaders/matrix.wgsl")))
@@ -571,99 +622,6 @@ impl<'a> Render<'a> {
             },
         });
 
-        let primitive_pipeline_layout = kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&primitive_system_bind_group_layout, &primitive_data_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let primitive_pipeline = kernel.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&primitive_pipeline_layout),
-
-            depth_stencil: Some(wgpu::DepthStencilState {
-                bias: wgpu::DepthBiasState {..Default::default()},
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                depth_write_enabled: true,
-                format: target.depth.get_texture().format(),
-                stencil: wgpu::StencilState {
-                    front: wgpu::StencilFaceState::IGNORE,
-                    back: wgpu::StencilFaceState::IGNORE,
-                    read_mask: 0,
-                    write_mask: 0
-                }
-            }),
-            fragment: Some(wgpu::FragmentState {
-                entry_point: "fs_main",
-                module: &primitive_shader,
-                targets: &[
-                    /* position_id */
-                    Some(wgpu::ColorTargetState {
-                        blend: None,
-                        format: target.position_id.get_texture().format(),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    /* normal_instance */
-                    Some(wgpu::ColorTargetState {
-                        blend: None,
-                        format: target.normal_id.get_texture().format(),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    /* base_color_opcaity */
-                    Some(wgpu::ColorTargetState {
-                        blend: None,
-                        format: target.base_color_opcaity.get_texture().format(),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    /* metallic_roughness_occlusion_meta */
-                    Some(wgpu::ColorTargetState {
-                        blend: None,
-                        format: target.metallic_roughness_occlusion_meta.get_texture().format(),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
-            }),
-            multisample: Default::default(),
-            multiview: None,
-            primitive: wgpu::PrimitiveState {
-                conservative: false,
-                cull_mode: Some(wgpu::Face::Back),
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                front_face: wgpu::FrontFace::Ccw,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                strip_index_format: None,
-                unclipped_depth: false,
-            },
-            vertex: wgpu::VertexState {
-                entry_point: "vs_main",
-                module: &primitive_shader,
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        /* position */
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        /* tex_coord */
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: std::mem::size_of::<Vec3f>() as u64,
-                            shader_location: 1,
-                        },
-                        /* normal */
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
-                            offset: std::mem::size_of::<Vec3f>() as u64 + std::mem::size_of::<Vec2f>() as u64,
-                            shader_location: 2,
-                        },
-                    ],
-                }],
-            },
-        });
-
         let matrix_bind_group_layout = kernel.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -742,7 +700,6 @@ impl<'a> Render<'a> {
             matrix_count: 0usize,
             matrix_pipeline,
             primitive_data_bind_group_layout,
-            primitive_pipeline,
             primitive_system_bind_group,
             primitive_system_bind_group_layout,
             world_matrix_buffer,
@@ -772,7 +729,126 @@ impl<'a> Render<'a> {
                 ..Default::default()
             }), std::mem::size_of::<CameraBufferData>())
         });
-    }
+    } // fn update_camera_buffer
+
+    /// Primitive pipleine create function
+    /// * `descriptor` - descriptor of primitive pipeline
+    /// * Returns created pipeline or error
+    pub fn create_primitive_pipeline(&mut self, descriptor: &PrimitivePipelineDescriptor) -> Result<Arc<PrimitivePipeline>, PrimitivePipelineCreateError> {
+        let pipeline_layout = self.kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                &self.primitive_system_bind_group_layout,
+                &self.primitive_data_bind_group_layout,
+            ],
+        });
+
+        let shader = self.kernel.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(descriptor.shader_source)),
+        });
+
+        let buffer_attributes: Vec<Vec<wgpu::VertexAttribute>> = descriptor.vertices.iter().map(|descriptor| {
+            descriptor.attributes.iter().map(|attr| {
+                wgpu::VertexAttribute {
+                    format: attr.format,
+                    offset: attr.offset as u64,
+                    shader_location: attr.location as u32,
+                }
+            }).collect()
+        }).collect();
+
+        let buffer_descriptors: Vec<wgpu::VertexBufferLayout> = descriptor.vertices.iter().zip(buffer_attributes.iter()).map(|(buffer, attributes)| {
+            wgpu::VertexBufferLayout {
+                array_stride: buffer.stride as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            }
+        }).collect();
+
+        let pipeline = self.kernel.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+
+            depth_stencil: Some(wgpu::DepthStencilState {
+                bias: wgpu::DepthBiasState {..Default::default()},
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: true,
+                format: self.target.depth.get_texture().format(),
+                stencil: wgpu::StencilState {
+                    front: wgpu::StencilFaceState::IGNORE,
+                    back: wgpu::StencilFaceState::IGNORE,
+                    read_mask: 0,
+                    write_mask: 0
+                }
+            }),
+            fragment: Some(wgpu::FragmentState {
+                entry_point: "fs_main",
+                module: &shader,
+                targets: &[
+                    /* position_id */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: self.target.position_id.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    /* normal_instance */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: self.target.normal_id.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    /* base_color_opcaity */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: self.target.base_color_opcaity.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    /* metallic_roughness_occlusion_meta */
+                    Some(wgpu::ColorTargetState {
+                        blend: None,
+                        format: self.target.metallic_roughness_occlusion_meta.get_texture().format(),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            primitive: wgpu::PrimitiveState {
+                conservative: false,
+                cull_mode: Some(wgpu::Face::Back),
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                polygon_mode: match descriptor.polygon_mode {
+                    PolygonMode::Fill => wgpu::PolygonMode::Fill,
+
+                    PolygonMode::Line => if self.kernel.device_features.contains(wgpu::Features::POLYGON_MODE_LINE) {
+                        wgpu::PolygonMode::Line
+                    } else {
+                        wgpu::PolygonMode::Fill
+                    },
+
+                    PolygonMode::Point => if self.kernel.device_features.contains(wgpu::Features::POLYGON_MODE_POINT) {
+                        wgpu::PolygonMode::Point
+                    } else {
+                        wgpu::PolygonMode::Fill
+                    },
+                },
+                strip_index_format: None,
+                unclipped_depth: false,
+            },
+            vertex: wgpu::VertexState {
+                entry_point: "vs_main",
+                module: &shader,
+                buffers: &buffer_descriptors,
+            },
+        });
+
+        Ok(Arc::new(PrimitivePipeline {
+            pipeline,
+        }))
+    } // fn create_primitive_pipeline
 
     /// Directional light create funciton
     /// * `descriptor` - direcitonal light descriptor
@@ -814,7 +890,7 @@ impl<'a> Render<'a> {
     /// Primitive create function
     /// * `descriptor` - created primitive descriptor
     /// * Returns created primitive
-    pub fn create_primitive(&mut self, descriptor: &PrimitiveDescriptor) -> Primitive {
+    pub fn create_primitive<'b>(&mut self, descriptor: &PrimitiveDescriptor<'b>) -> Primitive {
         let uniform_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             mapped_at_creation: false,
@@ -843,15 +919,17 @@ impl<'a> Render<'a> {
             layout: &self.primitive_data_bind_group_layout,
         });
 
-        let vertex_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            mapped_at_creation: false,
-            size: (std::mem::size_of::<Vertex>() * descriptor.vertices.len()) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
-        });
-        self.kernel.queue.write_buffer(&vertex_buffer, 0, unsafe {
-            std::slice::from_raw_parts(std::mem::transmute(descriptor.vertices.as_ptr()), descriptor.vertices.len() * std::mem::size_of::<Vertex>())
-        });
+        let vertex_buffers: Vec<wgpu::Buffer> = descriptor.vertices.iter().map(|vbuf_data| {
+            let buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                mapped_at_creation: false,
+                size: vbuf_data.len() as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
+            });
+            self.kernel.queue.write_buffer(&buffer, 0, &vbuf_data);
+
+            buffer
+        }).collect();
 
         let index_buffer = self.kernel.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -866,11 +944,12 @@ impl<'a> Render<'a> {
         });
 
         Primitive {
+            pipeline: descriptor.pipeline.clone(),
             index_buffer,
             index_count: descriptor.indices.map_or(0, |idx| idx.len()),
             primitive_bind_group,
             uniform_buffer,
-            vertex_buffer,
+            vertex_buffers,
             vertex_count: descriptor.vertices.len(),
             world_transforms: Vec::new(),
         }
@@ -1009,12 +1088,15 @@ impl<'a> Render<'a> {
                 let ext = self.surface.get_extent();
                 render_pass.set_viewport(0.0, 0.0, ext.x as f32, ext.y as f32, 0.0, 1.0);
 
-                render_pass.set_pipeline(&self.primitive_pipeline);
-                render_pass.set_bind_group(0, &self.primitive_system_bind_group, &[]);
-
                 for primitive in &scene.primitives {
+                    render_pass.set_pipeline(&primitive.pipeline.pipeline);
+                    render_pass.set_bind_group(0, &self.primitive_system_bind_group, &[]);
                     render_pass.set_bind_group(1, &primitive.primitive_bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, primitive.vertex_buffer.slice(0..));
+
+                    for (index, buffer) in primitive.vertex_buffers.iter().enumerate() {
+                        render_pass.set_vertex_buffer(index as u32, buffer.slice(0..));
+                    }
+
                     if primitive.index_count == 0 {
                         render_pass.draw(0..(primitive.vertex_count as u32), 0..(primitive.world_transforms.len() as u32));
                     } else {
@@ -1056,7 +1138,7 @@ impl<'a> Render<'a> {
     }
 }
 
-// To-display primitive collection
+/// To-display primitive collection
 pub struct Scene<'a> {
     primitives: Vec<&'a Primitive>,
     directional_lights: Vec<&'a DirectionalLight>,

@@ -80,7 +80,7 @@ impl Timer {
     /// * Returns FPS
     pub fn get_fps(&self) -> f32 {
         self.fps
-    } // fn get_fps
+    } // fn get_Efps
 } // impl Timer
 
 // file timer.rs
