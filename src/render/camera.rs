@@ -169,3 +169,5 @@ impl Camera {
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
     } // fn resize
 } // impl Camera
+
+// file camera.rs

@@ -32,3 +32,5 @@ impl Kernel {
         }
     } // fn create_texture
 }
+
+// file texture.rs

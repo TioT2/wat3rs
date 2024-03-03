@@ -24,7 +24,7 @@ pub struct Vertex {
 }
 
 /// Camera buffer content representation structure
-#[repr(align(16))]
+#[repr(C, align(16))]
 #[derive(Copy, Clone, Default)]
 pub struct CameraBufferData {
     pub view_matrix: Mat4x4f,
@@ -119,36 +119,48 @@ impl ToString for PrimitivePipelineCreateError {
     } // fn to_string
 }
 
-pub struct PrimitivePipelineDescriptor<'a> {
+pub struct PipelineDescriptor<'a> {
     pub shader_source: &'a str,
     pub vertices: &'a [VertexBufferDescriptor<'a>],
     pub polygon_mode: PolygonMode,
 }
 
-pub struct PrimitivePipeline {
+pub struct Pipeline {
     // pipeline_layout: wgpu::PipelineLayout,
     pipeline: wgpu::RenderPipeline,
 }
 
+pub struct Buffer {
+    buffer: wgpu::Buffer,
+    allowed_usage: wgpu::BufferUsages,
+}
+
+pub struct BindSet {
+    kernel: Arc<Kernel>,
+    pipeline: Arc<Pipeline>,
+}
+
+/// Mesh representation structure
+pub struct Mesh {
+    kernel: Arc<Kernel>,
+    pipeline: Arc<Pipeline>,
+    vertex_buffers: Vec<wgpu::Buffer>,
+    vertex_count: usize,
+    index_buffer: wgpu::Buffer,
+    index_count: usize,
+}
 
 /// Primitive descriptor with custom vertex format descriptor
 pub struct PrimitiveDescriptor<'a> {
-    pub pipeline: Arc<PrimitivePipeline>,
+    pub pipeline: Arc<Pipeline>,
     pub vertices: &'a [&'a [u8]],
     pub indices: Option<&'a [u32]>,
     pub material: &'a Material,
 } // pub struct CVTPrimitiveDescriptor
 
-/// Primitive create info
-pub struct PrimitiveDescriptorOld<'a> {
-    pub vertices: &'a [Vertex],
-    pub indices: Option<&'a [u32]>,
-    pub material: &'a Material,
-}
-
 /// Rendering primitive representation structure
 pub struct Primitive {
-    pipeline: Arc<PrimitivePipeline>,
+    pipeline: Arc<Pipeline>,
     uniform_buffer: wgpu::Buffer,
     primitive_bind_group: wgpu::BindGroup,
 
@@ -170,12 +182,19 @@ impl Primitive {
 } // impl Primitive
 
 pub struct Target {
+    extent: Vec2<usize>,
     position_id: Texture,
     normal_id: Texture,
     base_color_opcaity: Texture,
     metallic_roughness_occlusion_meta: Texture,
     depth: Texture,
 }
+
+impl Target {
+    pub fn get_extent(&self) -> Vec2<usize> {
+        self.extent
+    } // fn get_extent
+} // impl Target
 
 impl Kernel {
     /// Matrix buffers create function
@@ -268,7 +287,7 @@ impl Kernel {
     /// * `extent` - target extent
     /// * Returns created target
     fn create_target(&self, extent: Vec2<usize>) -> Target {
-        let extent = wgpu::Extent3d {
+        let extent3d = wgpu::Extent3d {
             width: extent.x as u32,
             height: extent.y as u32,
             depth_or_array_layers: 1,
@@ -279,11 +298,12 @@ impl Kernel {
             label: None,
             mip_level_count: 1,
             sample_count: 1,
-            size: extent,
+            size: extent3d,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[wgpu::TextureFormat::Rgba32Float]
         };
         Target {
+            extent,
             position_id: self.create_texture(&wgpu::TextureDescriptor {
                 format: wgpu::TextureFormat::Rgba32Float,
                 view_formats: &[wgpu::TextureFormat::Rgba32Float],
@@ -391,6 +411,7 @@ pub struct Render<'a> {
     matrix_bind_group_layout: wgpu::BindGroupLayout,
     matrix_bind_group: wgpu::BindGroup,
 
+    // prev_command_buffer: wgpu::CommandBuffer,
     camera: Camera,
 } // struct Render<'a>
 
@@ -734,7 +755,7 @@ impl<'a> Render<'a> {
     /// Primitive pipleine create function
     /// * `descriptor` - descriptor of primitive pipeline
     /// * Returns created pipeline or error
-    pub fn create_primitive_pipeline(&mut self, descriptor: &PrimitivePipelineDescriptor) -> Result<Arc<PrimitivePipeline>, PrimitivePipelineCreateError> {
+    pub fn create_primitive_pipeline(&mut self, descriptor: &PipelineDescriptor) -> Result<Arc<Pipeline>, PrimitivePipelineCreateError> {
         let pipeline_layout = self.kernel.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             push_constant_ranges: &[],
@@ -845,7 +866,7 @@ impl<'a> Render<'a> {
             },
         });
 
-        Ok(Arc::new(PrimitivePipeline {
+        Ok(Arc::new(Pipeline {
             pipeline,
         }))
     } // fn create_primitive_pipeline
@@ -957,8 +978,8 @@ impl<'a> Render<'a> {
 
     /// Scene create function
     /// * Returns created scene
-    pub fn create_scene<'b>(&mut self) -> Scene<'b> {
-        Scene {
+    pub fn create_scene<'b>(&mut self) -> Frame<'b> {
+        Frame {
             primitives: Vec::new(),
             directional_lights: Vec::new(),
         }
@@ -968,15 +989,15 @@ impl<'a> Render<'a> {
     /// * `new_extent` - new renderer extent
     pub fn resize(&mut self, new_extent: Vec2<usize>) {
         self.target = self.kernel.create_target(new_extent);
+        self.camera.resize(new_extent);
+
         self.target_bind_group = self.kernel.create_target_bind_group(&self.target, &self.target_bind_group_layout);
         self.surface.resize(new_extent);
-
-        self.camera.resize(new_extent);
     } // fn resize
 
     /// Scene rendering and presentation requesting function
     /// * `scene` - scene to render
-    pub fn render_scene(&mut self, scene: &Scene) {
+    pub fn render_scene(&mut self, scene: &Frame) {
         let surface_texture = match self.surface.get_texture() {
             Some(tex) => tex,
             None => return
@@ -1085,7 +1106,7 @@ impl<'a> Render<'a> {
                     }),
                     ..Default::default()
                 });
-                let ext = self.surface.get_extent();
+                let ext = self.target.get_extent();
                 render_pass.set_viewport(0.0, 0.0, ext.x as f32, ext.y as f32, 0.0, 1.0);
 
                 for primitive in &scene.primitives {
@@ -1138,13 +1159,13 @@ impl<'a> Render<'a> {
     }
 }
 
-/// To-display primitive collection
-pub struct Scene<'a> {
+/// To-display object collection
+pub struct Frame<'a> {
     primitives: Vec<&'a Primitive>,
     directional_lights: Vec<&'a DirectionalLight>,
 }
 
-impl<'a> Scene<'a> {
+impl<'a> Frame<'a> {
     /// Primitive displaying function
     /// * `primitive` - primitive to display scene-lifetime reference
     pub fn add_primitive(&mut self, primitive: &'a mut Primitive) {

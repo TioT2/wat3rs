@@ -5,7 +5,6 @@
 /// `Last changed` 17.02.2024
 
 use std::sync::Arc;
-use wgpu::core::device;
 
 use crate::math::*;
 
@@ -23,6 +22,7 @@ pub struct Kernel {
     /// WebGPU queue (execution queue)
     pub queue: wgpu::Queue,
 
+    /// List of supported WebGPU device features
     pub device_features: wgpu::Features,
 } // struct Kernel
 
