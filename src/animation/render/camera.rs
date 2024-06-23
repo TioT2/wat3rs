@@ -4,7 +4,7 @@
 /// `Author` TioT2
 /// `Last changed` 17.02.2024
 
-pub use crate::math::*;
+use crate::util::{math::Ext2, Ext2f, Mat4x4f, Vec2f, Vec3f};
 
 
 /// Camera in space position info representation structure
@@ -30,7 +30,7 @@ pub struct Location {
 #[derive(Copy, Clone)]
 pub struct Projection {
     /// Projection size
-    pub size: Vec2f,
+    pub size: Ext2<f32>,
 
     /// Projection near plane
     pub near: f32,
@@ -58,13 +58,11 @@ pub struct Camera {
     location: Location,
     projection: Projection,
     matrices: Matrices,
-    extent: Vec2<usize>,
+    extent: Ext2<usize>,
 } // struct camera
 
-impl Camera {
-    /// Camera create function
-    /// * Returns new camera
-    pub fn new() -> Self {
+impl Default for Camera {
+    fn default() -> Self {
         let mut cam = Self {
             location: Location {
                 direction: Vec3f::new(0.0, 0.0, -1.0),
@@ -76,7 +74,7 @@ impl Camera {
             },
 
             projection: Projection {
-                size: Vec2f::new(1.0, 1.0),
+                size: Ext2f::new(1.0, 1.0),
                 near: 1.0,
                 far: 1.0,
             },
@@ -87,28 +85,30 @@ impl Camera {
                 view_projection: Mat4x4f::identity(),
             },
 
-            extent: Vec2::<usize>::new(0, 0),
+            extent: Ext2::new(0, 0),
         };
 
-        cam.resize(Vec2::<usize>::new(800, 600));
-        cam.set_projection(0.05, 1024.0, Vec2f::new(0.1, 0.1));
+        cam.resize(Ext2::<usize>::new(800, 600));
+        cam.set_projection(0.05, 4096.0, Ext2f::new(0.1, 0.1));
 
         cam
     }
+}
 
+impl Camera {
     /// Camera setting function
     /// * `location` - new camera location
     /// * `at` - location camera points at
     /// * `approx_up` - approximate up direction
-    pub fn set(&mut self, location: &Vec3f, at: &Vec3f, approx_up: &Vec3f) {
-        let view = Mat4x4::view(location, at, approx_up);
+    pub fn set(&mut self, location: Vec3f, at: Vec3f, approx_up: Vec3f) {
+        let view = Mat4x4f::view(location, at, approx_up);
 
         self.location.right     = Vec3f::new( view.data[0][0],  view.data[1][0],  view.data[2][0]);
         self.location.up        = Vec3f::new( view.data[0][1],  view.data[1][1],  view.data[2][1]);
         self.location.direction = Vec3f::new(-view.data[0][2], -view.data[1][2], -view.data[2][2]);
 
-        self.location.location = *location;
-        self.location.at = *at;
+        self.location.location = location;
+        self.location.at = at;
 
         self.matrices.view = view;
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
@@ -136,36 +136,36 @@ impl Camera {
     /// * `near` - projection plane distance
     /// * `far` - projection maximal distance
     /// * `size` - projection size
-    pub fn set_projection(&mut self, near: f32, far: f32, size: Vec2f) {
+    pub fn set_projection(&mut self, near: f32, far: f32, size: Ext2f) {
         self.projection.near = near;
         self.projection.far = far;
         self.projection.size = size;
 
-        let proj_ext = self.projection.size * if self.extent.x > self.extent.y {
-            Vec2f::new(self.extent.x as f32 / self.extent.y as f32, 1.0)
+        let proj_ext: Ext2f = (if self.extent.w > self.extent.h {
+            Vec2f::new(self.extent.w as f32 / self.extent.h as f32, 1.0)
         } else {
-            Vec2f::new(1.0, self.extent.y as f32 / self.extent.x as f32)
-        };
+            Vec2f::new(1.0, self.extent.h as f32 / self.extent.w as f32)
+        } * Into::<Vec2f>::into(self.projection.size.into_tuple())).into_tuple().into();
 
-        self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.x / 2.0, proj_ext.x / 2.0, -proj_ext.y / 2.0, proj_ext.y / 2.0, self.projection.near, self.projection.far);
+        self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.w / 2.0, proj_ext.w / 2.0, -proj_ext.h / 2.0, proj_ext.h / 2.0, self.projection.near, self.projection.far);
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
     } // fn set_projection
 
     /// Camera fitting for new resolution
     /// * `new_extent` - new resolution
-    pub fn resize(&mut self, new_extent: Vec2<usize>) {
-        if self.extent.x == new_extent.x && self.extent.y == new_extent.y {
+    pub fn resize(&mut self, new_extent: Ext2<usize>) {
+        if self.extent.w == new_extent.w && self.extent.h == new_extent.h {
             return;
         }
         self.extent = new_extent;
 
-        let proj_ext = self.projection.size * if self.extent.x > self.extent.y {
-            Vec2f::new(self.extent.x as f32 / self.extent.y as f32, 1.0)
+        let proj_ext: Ext2f = (if self.extent.w > self.extent.h {
+            Vec2f::new(self.extent.w as f32 / self.extent.h as f32, 1.0)
         } else {
-            Vec2f::new(1.0, self.extent.y as f32 / self.extent.x as f32)
-        };
+            Vec2f::new(1.0, self.extent.h as f32 / self.extent.w as f32)
+        } * Into::<Vec2f>::into(self.projection.size.into_tuple())).into_tuple().into();
 
-        self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.x / 2.0, proj_ext.x / 2.0, -proj_ext.y / 2.0, proj_ext.y / 2.0, self.projection.near, self.projection.far);
+        self.matrices.projection = Mat4x4f::projection_frustum(-proj_ext.w / 2.0, proj_ext.w / 2.0, -proj_ext.h / 2.0, proj_ext.h / 2.0, self.projection.near, self.projection.far);
         self.matrices.view_projection = self.matrices.view * self.matrices.projection;
     } // fn resize
 } // impl Camera
